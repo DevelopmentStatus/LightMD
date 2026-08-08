@@ -27,6 +27,15 @@ namespace LightMD
         /// </summary>
         private const string VirtualHostSuffix = ".lightmd.local";
 
+        /// <summary>
+        /// Links to local files are pointed here. Nothing ever serves this host —
+        /// <see cref="Form1"/> cancels the navigation and handles the target
+        /// itself, which is why the path travels in the URL rather than needing a
+        /// folder mapping. Keeping links unmapped means following one grants no
+        /// read access to the folder it lives in.
+        /// </summary>
+        public const string DocumentLinkHost = "open" + VirtualHostSuffix;
+
         private static readonly MarkdownPipeline Pipeline =
             MarkdownColorCode.UseColorCode(
                 new MarkdownPipelineBuilder()
@@ -240,12 +249,13 @@ namespace LightMD
             renderer.Render(document);
             writer.Flush();
 
-            var html = RewriteLocalImages(writer.ToString(), filePath, out var folderMappings);
+            var html = RewriteLocalReferences(writer.ToString(), filePath, out var folderMappings);
             return (html, folderMappings);
         }
 
         /// <summary>
-        /// Points every local image at a virtual host WebView2 can serve.
+        /// Points local images at a virtual host WebView2 can serve, and local
+        /// links at the host <see cref="Form1"/> intercepts.
         /// <para>
         /// The document is displayed with <c>NavigateToString</c>, which gives the
         /// page a <c>data:</c> URI — there is no base path for a relative
@@ -261,7 +271,7 @@ namespace LightMD
         /// directories away both work.
         /// </para>
         /// </summary>
-        private static string RewriteLocalImages(
+        private static string RewriteLocalReferences(
             string html, string? filePath,
             out IReadOnlyDictionary<string, string> folderMappings)
         {
@@ -330,6 +340,22 @@ namespace LightMD
                 return changed ? Rebuild(match, string.Join(", ", rewritten)) : match.Value;
             });
 
+            html = LocalHrefAttribute.Replace(html, match =>
+            {
+                var url = match.Groups["url"].Value;
+                if (!TryResolveLocalFile(url, baseFolder, out var fullPath))
+                    return match.Value;
+
+                // The fragment survives the round trip so links like
+                // "other.md#usage" still land on the right heading.
+                var hash = url.IndexOf('#');
+                var fragment = hash >= 0 ? url[hash..] : string.Empty;
+
+                var target = $"https://{DocumentLinkHost}/?path={Uri.EscapeDataString(fullPath)}"
+                           + (fragment.Length > 0 ? $"&fragment={Uri.EscapeDataString(fragment[1..])}" : string.Empty);
+                return Rebuild(match, target);
+            });
+
             return html;
 
             static string Rebuild(System.Text.RegularExpressions.Match match, string value) =>
@@ -354,9 +380,14 @@ namespace LightMD
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase
                 | System.Text.RegularExpressions.RegexOptions.Compiled);
 
+        private static readonly System.Text.RegularExpressions.Regex LocalHrefAttribute =
+            new(@"(?<attr>\bhref\s*=\s*)(?<q>[""'])(?<url>[^""']*)\k<q>",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.Compiled);
+
         /// <summary>
-        /// Resolves a Markdown image URL to an existing local file, or returns
-        /// false for remote URLs, data URIs and anything that isn't on disk.
+        /// Resolves a Markdown URL to an existing local file, or returns false
+        /// for remote URLs, data URIs, bare fragments and anything not on disk.
         /// </summary>
         private static bool TryResolveLocalFile(string url, string baseFolder, out string fullPath)
         {

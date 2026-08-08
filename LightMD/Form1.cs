@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 
 namespace LightMD
@@ -7,6 +8,9 @@ namespace LightMD
     {
         private readonly string[]? _args;
         private readonly List<string> _mappedHosts = new();
+
+        /// <summary>Heading to jump to once the next document has loaded.</summary>
+        private string? _pendingFragment;
 
         public Form1(string[]? args = null)
         {
@@ -48,6 +52,7 @@ namespace LightMD
                 webView.CoreWebView2.Settings.IsScriptEnabled = false;
 
                 webView.CoreWebView2.NavigationStarting += OnNavigationStarting;
+                webView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
 
                 if (_args is { Length: > 0 })
                 {
@@ -68,54 +73,146 @@ namespace LightMD
             }
         }
 
-        private void OnNavigationStarting(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2NavigationStartingEventArgs e)
+        private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
         {
             if (e.Uri == "about:blank")
                 return;
+
+            // A link to another local file. Handle it here rather than letting
+            // the WebView navigate: markdown opens in the viewer, anything else
+            // goes to whichever app owns it.
+            if (e.Uri.StartsWith($"https://{MarkdownRenderer.DocumentLinkHost}/", StringComparison.OrdinalIgnoreCase))
+            {
+                e.Cancel = true;
+                OpenLinkedFile(e.Uri);
+                return;
+            }
 
             if (e.Uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                 e.Uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 e.Cancel = true;
-
-                try
-                {
-                    Process.Start(new ProcessStartInfo
-                    {
-                        FileName = e.Uri,
-                        UseShellExecute = true
-                    });
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(
-                        $"Could not open link:\n\n{ex.Message}",
-                        "LightMD",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-                }
+                OpenExternally(e.Uri);
             }
         }
 
-        private void LoadMarkdownFile(string filePath)
+        /// <summary>
+        /// Follows a rewritten link: markdown files replace the current
+        /// document, everything else is handed to the shell.
+        /// </summary>
+        private void OpenLinkedFile(string uri)
+        {
+            string path;
+            string? fragment;
+            try
+            {
+                var query = System.Web.HttpUtility.ParseQueryString(new Uri(uri).Query);
+                path = query["path"] ?? string.Empty;
+                fragment = query["fragment"];
+            }
+            catch (UriFormatException)
+            {
+                return;
+            }
+
+            if (path.Length == 0)
+                return;
+
+            if (IsMarkdownFile(path))
+            {
+                // BeginInvoke: navigating from inside a NavigationStarting
+                // handler is not allowed, so let this one unwind first.
+                BeginInvoke(() => LoadMarkdownFile(path, fragment));
+            }
+            else
+            {
+                OpenExternally(path);
+            }
+        }
+
+        private void OpenExternally(string target)
         {
             try
             {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = target,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException)
+            {
+                MessageBox.Show(
+                    $"Could not open:\n\n{ex.Message}",
+                    "LightMD",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+
+        /// <summary>
+        /// Restores the reader's position once a document has painted: the
+        /// heading a link pointed at.
+        /// <para>
+        /// <c>ExecuteScriptAsync</c> keeps working while
+        /// <c>IsScriptEnabled</c> is false — that setting governs script the
+        /// document itself carries, not script the host injects. So this
+        /// costs nothing in terms of what an opened file is allowed to run.
+        /// </para>
+        /// </summary>
+        private async void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            // Cancelling a navigation also raises this event. Leave the pending
+            // state alone in that case: the document the reader actually asked
+            // for is on its way, and it is the one that should consume it.
+            if (!e.IsSuccess)
+                return;
+
+            var fragment = _pendingFragment;
+            _pendingFragment = null;
+
+            if (string.IsNullOrEmpty(fragment))
+                return;
+
+            try
+            {
+                var id = JsonSerializer.Serialize(fragment);
+                await webView.CoreWebView2.ExecuteScriptAsync(
+                    $"document.getElementById({id})?.scrollIntoView()");
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+            {
+                // The view went away mid-navigation; nothing to restore onto.
+            }
+        }
+
+        private static bool IsMarkdownFile(string path)
+        {
+            var extension = Path.GetExtension(path)?.ToLowerInvariant();
+            return !string.IsNullOrEmpty(extension) && MarkdownExtensions.Contains(extension);
+        }
+
+        private static readonly HashSet<string> MarkdownExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".md", ".markdown", ".mdown", ".mkd", ".mkdn", ".mdwn", ".mdtxt", ".text"
+        };
+
+        private void LoadMarkdownFile(string filePath, string? fragment = null)
+        {
+            try
+            {
+                _pendingFragment = fragment;
+
                 if (!File.Exists(filePath))
                 {
                     ShowError($"File does not exist:\n\n{filePath}");
                     return;
                 }
 
-                var extension = Path.GetExtension(filePath)?.ToLowerInvariant();
-                var validExtensions = new HashSet<string>
+                if (!IsMarkdownFile(filePath))
                 {
-                    ".md", ".markdown", ".mdown", ".mkd", ".mkdn", ".mdwn", ".mdtxt", ".text"
-                };
-
-                if (string.IsNullOrEmpty(extension) || !validExtensions.Contains(extension))
-                {
-                    ShowError($"Unsupported file type: {extension ?? "(none)"}\n\nSupported: .md, .markdown, .mdown, .mkd, .mkdn, .mdwn, .mdtxt, .text");
+                    var extension = Path.GetExtension(filePath);
+                    ShowError($"Unsupported file type: {(string.IsNullOrEmpty(extension) ? "(none)" : extension)}\n\nSupported: {string.Join(", ", MarkdownExtensions.Order())}");
                     return;
                 }
 
@@ -187,13 +284,7 @@ namespace LightMD
         {
             if (e.Data?.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)
             {
-                var extension = Path.GetExtension(files[0])?.ToLowerInvariant();
-                var validExtensions = new HashSet<string>
-                {
-                    ".md", ".markdown", ".mdown", ".mkd", ".mkdn", ".mdwn", ".mdtxt", ".text"
-                };
-
-                if (!string.IsNullOrEmpty(extension) && validExtensions.Contains(extension))
+                if (IsMarkdownFile(files[0]))
                 {
                     LoadMarkdownFile(files[0]);
                 }
