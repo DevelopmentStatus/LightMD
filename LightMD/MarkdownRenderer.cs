@@ -278,27 +278,62 @@ namespace LightMD
             // folder -> virtual host, so repeated folders reuse one mapping.
             var hostsByFolder = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            return LocalSourceAttribute.Replace(html, match =>
+            string ServeFile(string fullPath)
             {
-                var url = match.Groups["url"].Value;
-
-                if (!TryResolveLocalFile(url, baseFolder, out var fullPath))
-                    return match.Value;
-
-                var folder = Path.GetDirectoryName(fullPath);
-                if (string.IsNullOrEmpty(folder))
-                    return match.Value;
-
+                var folder = Path.GetDirectoryName(fullPath)!;
                 if (!hostsByFolder.TryGetValue(folder, out var host))
                 {
                     host = $"asset{hostsByFolder.Count}{VirtualHostSuffix}";
                     hostsByFolder[folder] = host;
                     mappings[host] = folder;
                 }
+                return $"https://{host}/{Uri.EscapeDataString(Path.GetFileName(fullPath))}";
+            }
 
-                var served = $"https://{host}/{Uri.EscapeDataString(Path.GetFileName(fullPath))}";
-                return $"{match.Groups["attr"].Value}{match.Groups["q"].Value}{served}{match.Groups["q"].Value}";
+            html = LocalSourceAttribute.Replace(html, match =>
+            {
+                if (!TryResolveLocalFile(match.Groups["url"].Value, baseFolder, out var fullPath))
+                    return match.Value;
+
+                return Rebuild(match, ServeFile(fullPath));
             });
+
+            // srcset carries a comma-separated candidate list, each entry a URL
+            // followed by an optional width or density descriptor.
+            html = SrcsetAttribute.Replace(html, match =>
+            {
+                var candidates = match.Groups["url"].Value.Split(',');
+                var rewritten = new List<string>(candidates.Length);
+                var changed = false;
+
+                foreach (var candidate in candidates)
+                {
+                    var entry = candidate.Trim();
+                    if (entry.Length == 0)
+                        continue;
+
+                    var split = entry.IndexOfAny(new[] { ' ', '\t' });
+                    var url = split < 0 ? entry : entry[..split];
+                    var descriptor = split < 0 ? string.Empty : entry[split..];
+
+                    if (TryResolveLocalFile(url, baseFolder, out var fullPath))
+                    {
+                        rewritten.Add(ServeFile(fullPath) + descriptor);
+                        changed = true;
+                    }
+                    else
+                    {
+                        rewritten.Add(entry);
+                    }
+                }
+
+                return changed ? Rebuild(match, string.Join(", ", rewritten)) : match.Value;
+            });
+
+            return html;
+
+            static string Rebuild(System.Text.RegularExpressions.Match match, string value) =>
+                $"{match.Groups["attr"].Value}{match.Groups["q"].Value}{value}{match.Groups["q"].Value}";
         }
 
         /// <summary>
@@ -311,6 +346,11 @@ namespace LightMD
         /// </summary>
         private static readonly System.Text.RegularExpressions.Regex LocalSourceAttribute =
             new(@"(?<attr>\b(?:src|poster)\s*=\s*)(?<q>[""'])(?<url>[^""']*)\k<q>",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly System.Text.RegularExpressions.Regex SrcsetAttribute =
+            new(@"(?<attr>\bsrcset\s*=\s*)(?<q>[""'])(?<url>[^""']*)\k<q>",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase
                 | System.Text.RegularExpressions.RegexOptions.Compiled);
 
