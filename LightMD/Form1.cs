@@ -12,6 +12,16 @@ namespace LightMD
         {
             _args = args;
             InitializeComponent();
+
+            // The embedded .ico carries every size, so the title bar and the
+            // taskbar each pick the resolution they want.
+            using var iconStream = System.Reflection.Assembly
+                .GetExecutingAssembly()
+                .GetManifestResourceStream("LightMD.lightmd.ico");
+            if (iconStream is not null)
+            {
+                Icon = new Icon(iconStream);
+            }
         }
 
         protected override async void OnLoad(EventArgs e)
