@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!--
+    LightMD installer.
+
+    Build with installer/build.ps1 (it publishes the app first, then passes the
+    publish folder in as the PublishDir preprocessor variable).
+
+    UpgradeCode must never change: it is what lets a new version replace an
+    older one instead of installing alongside it.
+  -->
+  <Package
+      Name="LightMD"
+      Manufacturer="LightMD"
+      Version="$(Version)"
+      UpgradeCode="EF1A1820-6029-4187-8DDD-DE466B2A56B7"
+      Scope="perMachine"
+      Compressed="yes">
+
+    <!--
+      Remove any version already on the machine before laying down this one.
+
+      Windows finds the existing install by UpgradeCode, so this catches a copy
+      installed from any earlier MSI, wherever it was installed to. Scheduled
+      afterInstallValidate, so the old product is fully uninstalled before the
+      new files are written rather than the two overlapping.
+
+      AllowSameVersionUpgrades matters in practice: without it, installing a
+      rebuilt MSI carrying the *same* version number leaves the existing entry
+      in place and adds a second one to Installed apps.
+    -->
+    <MajorUpgrade
+        Schedule="afterInstallValidate"
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of LightMD is already installed. Uninstall it first from Settings &gt; Apps &gt; Installed apps." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(sys.SOURCEFILEDIR)..\LightMD\lightmd.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="LightMD" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="LightMD" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="AppShortcut" />
+      <ComponentGroupRef Id="FileAssociations" />
+    </Feature>
+  </Package>
+
+  <!-- Everything dotnet publish produced. -->
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(PublishDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Start menu entry. -->
+  <Fragment>
+    <ComponentGroup Id="AppShortcut">
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder"
+                 Guid="FC83DD6B-68C0-4A3E-AF80-7F99580AA2FC">
+        <Shortcut Id="LightMDShortcut"
+                  Name="LightMD"
+                  Description="A lightweight Markdown viewer"
+                  Target="[INSTALLFOLDER]LightMD.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon" />
+        <RegistryValue Root="HKCU" Key="Software\LightMD"
+                       Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!--
+    Markdown file handling.
+
+    This registers a ProgId and adds it to each extension's OpenWithProgids
+    list. That puts LightMD in the "Open with" menu without seizing the
+    default handler from whatever the user already uses — Windows lets them
+    promote it themselves via Open with > Choose another app.
+  -->
+  <Fragment>
+    <ComponentGroup Id="FileAssociations" Directory="INSTALLFOLDER">
+      <Component Id="MarkdownProgId" Guid="6ECB9503-9AD2-4EE9-B6FC-DEC3D3D4A4EB">
+
+        <!--
+          Written as plain registry values rather than ProgId/Verb elements:
+          those reference a File id, and the files here are harvested by the
+          Files element, which generates its own ids.
+        -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\LightMD.Document"
+                       Type="string" Value="Markdown Document" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\LightMD.Document\DefaultIcon"
+                       Type="string" Value="[INSTALLFOLDER]LightMD.exe,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\LightMD.Document\shell\open"
+                       Type="string" Value="Open with LightMD" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\LightMD.Document\shell\open\command"
+                       Type="string" Value="&quot;[INSTALLFOLDER]LightMD.exe&quot; &quot;%1&quot;" />
+
+        <RegistryValue Root="HKLM" Key="Software\Classes\.md\OpenWithProgids"
+                       Name="LightMD.Document" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.markdown\OpenWithProgids"
+                       Name="LightMD.Document" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mdown\OpenWithProgids"
+                       Name="LightMD.Document" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mkd\OpenWithProgids"
+                       Name="LightMD.Document" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mkdn\OpenWithProgids"
+                       Name="LightMD.Document" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mdwn\OpenWithProgids"
+                       Name="LightMD.Document" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mdtxt\OpenWithProgids"
+                       Name="LightMD.Document" Type="string" Value="" />
+
+        <RegistryValue Root="HKLM" Key="Software\LightMD"
+                       Name="FileAssociations" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>
