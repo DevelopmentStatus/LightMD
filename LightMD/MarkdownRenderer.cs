@@ -1,5 +1,7 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Web;
+using ColorCode.Styling;
 using Markdig;
 using Markdig.Renderers;
 using Markdig.Renderers.Html;
@@ -9,6 +11,13 @@ using MarkdownColorCode = Markdown.ColorCode.MarkdownPipelineBuilderExtensions;
 
 namespace LightMD
 {
+    /// <summary>Which palette a document is rendered with.</summary>
+    public enum ViewerTheme
+    {
+        Light,
+        Dark
+    }
+
     /// <summary>
     /// The rendered document, plus the folder mappings WebView2 needs in order
     /// to serve the local images the document refers to.
@@ -36,23 +45,28 @@ namespace LightMD
         /// </summary>
         public const string DocumentLinkHost = "open" + VirtualHostSuffix;
 
-        private static readonly MarkdownPipeline Pipeline =
+        private static readonly MarkdownPipeline LightPipeline = BuildPipeline(StyleDictionary.DefaultLight);
+        private static readonly MarkdownPipeline DarkPipeline = BuildPipeline(StyleDictionary.DefaultDark);
+
+        private static MarkdownPipeline BuildPipeline(StyleDictionary styles) =>
             MarkdownColorCode.UseColorCode(
                 new MarkdownPipelineBuilder()
                     .UseAdvancedExtensions()
                     .UseAutoIdentifiers(),
-                // ColorCode defaults to its dark palette, which renders as pale
-                // grey on this stylesheet's light code background.
-                styleDictionary: ColorCode.Styling.StyleDictionary.DefaultLight)
+                // ColorCode bakes colours in as inline styles, so the palette has
+                // to be chosen now rather than switched in CSS later. That is why
+                // a theme change re-renders instead of restyling.
+                styleDictionary: styles)
             .Build();
 
-        public static RenderedDocument Render(string markdown, string? filePath)
+        public static RenderedDocument Render(string markdown, string? filePath, ViewerTheme theme)
         {
             var title = string.IsNullOrEmpty(filePath)
                 ? "LightMD"
                 : HttpUtility.HtmlEncode(Path.GetFileName(filePath));
 
-            var (bodyHtml, folderMappings) = ToHtmlWithGitHubAnchors(markdown, filePath);
+            var pipeline = theme == ViewerTheme.Dark ? DarkPipeline : LightPipeline;
+            var (bodyHtml, folderMappings) = ToHtmlWithGitHubAnchors(markdown, filePath, pipeline);
 
             var html = $@"<!DOCTYPE html>
 <html lang=""en"">
@@ -61,6 +75,8 @@ namespace LightMD
     <meta name=""viewport"" content=""width=device-width, initial-scale=1"">
     <title>{title}</title>
     <style>
+{ThemeVariables(theme)}
+
         *, *::before, *::after {{
             box-sizing: border-box;
         }}
@@ -69,8 +85,8 @@ namespace LightMD
             font-family: -apple-system, BlinkMacSystemFont, ""Segoe UI"", Roboto, ""Helvetica Neue"", Arial, sans-serif;
             font-size: 16px;
             line-height: 1.7;
-            color: #1a1a1a;
-            background-color: #ffffff;
+            color: var(--text);
+            background-color: var(--bg);
             max-width: 900px;
             margin: 0 auto;
             padding: 32px 40px;
@@ -84,11 +100,11 @@ namespace LightMD
             margin-bottom: 0.5em;
             font-weight: 600;
             line-height: 1.3;
-            color: #111;
+            color: var(--heading);
         }}
 
-        h1 {{ font-size: 2em; border-bottom: 1px solid #e8e8e8; padding-bottom: 0.3em; }}
-        h2 {{ font-size: 1.5em; border-bottom: 1px solid #ececec; padding-bottom: 0.25em; }}
+        h1 {{ font-size: 2em; border-bottom: 1px solid var(--rule-strong); padding-bottom: 0.3em; }}
+        h2 {{ font-size: 1.5em; border-bottom: 1px solid var(--rule); padding-bottom: 0.25em; }}
         h3 {{ font-size: 1.25em; }}
         h4 {{ font-size: 1.1em; }}
 
@@ -98,7 +114,7 @@ namespace LightMD
         }}
 
         a {{
-            color: #0366d6;
+            color: var(--link);
             text-decoration: none;
         }}
 
@@ -119,8 +135,8 @@ namespace LightMD
         blockquote {{
             margin: 1em 0;
             padding: 0.5em 1em;
-            color: #6a737d;
-            border-left: 4px solid #dfe2e5;
+            color: var(--muted);
+            border-left: 4px solid var(--border);
         }}
 
         blockquote > :last-child {{
@@ -133,15 +149,15 @@ namespace LightMD
         }}
 
         :not(pre) > code {{
-            background-color: rgba(27,31,35,0.05);
+            background-color: var(--inline-code-bg);
             border-radius: 3px;
             padding: 0.2em 0.4em;
-            color: #e01e5a;
+            color: var(--inline-code-text);
         }}
 
         pre {{
-            background-color: #f6f8fa;
-            border: 1px solid #e1e4e8;
+            background-color: var(--code-bg);
+            border: 1px solid var(--code-border);
             border-radius: 6px;
             padding: 16px;
             overflow-x: auto;
@@ -153,7 +169,7 @@ namespace LightMD
             background: none;
             border: none;
             padding: 0;
-            color: #24292e;
+            color: var(--text);
             font-size: 0.9em;
         }}
 
@@ -164,18 +180,18 @@ namespace LightMD
         }}
 
         table th, table td {{
-            border: 1px solid #dfe2e5;
+            border: 1px solid var(--border);
             padding: 8px 12px;
             text-align: left;
         }}
 
         table th {{
-            background-color: #f6f8fa;
+            background-color: var(--surface);
             font-weight: 600;
         }}
 
         table tr:nth-child(even) {{
-            background-color: #f6f8fa;
+            background-color: var(--surface);
         }}
 
         img {{
@@ -185,7 +201,7 @@ namespace LightMD
 
         hr {{
             border: none;
-            border-top: 1px solid #e1e4e8;
+            border-top: 1px solid var(--code-border);
             margin: 2em 0;
         }}
 
@@ -199,6 +215,7 @@ namespace LightMD
 
         html {{
             scroll-behavior: smooth;
+            background-color: var(--bg);
         }}
     </style>
 </head>
@@ -211,16 +228,52 @@ namespace LightMD
         }
 
         /// <summary>
+        /// The palette for a theme. Everything else in the stylesheet refers to
+        /// these, so the two themes never drift apart structurally.
+        /// </summary>
+        private static string ThemeVariables(ViewerTheme theme) => theme == ViewerTheme.Dark
+            ? @"        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --text: #c9d1d9;
+            --heading: #e6edf3;
+            --muted: #8b949e;
+            --link: #58a6ff;
+            --border: #30363d;
+            --rule: #21262d;
+            --rule-strong: #30363d;
+            --code-bg: #161b22;
+            --code-border: #30363d;
+            --inline-code-bg: rgba(110,118,129,0.4);
+            --inline-code-text: #ff7b72;
+        }"
+            : @"        :root {
+            --bg: #ffffff;
+            --surface: #f6f8fa;
+            --text: #1a1a1a;
+            --heading: #111111;
+            --muted: #6a737d;
+            --link: #0366d6;
+            --border: #dfe2e5;
+            --rule: #ececec;
+            --rule-strong: #e8e8e8;
+            --code-bg: #f6f8fa;
+            --code-border: #e1e4e8;
+            --inline-code-bg: rgba(27,31,35,0.05);
+            --inline-code-text: #e01e5a;
+        }";
+
+        /// <summary>
         /// Renders markdown, replacing Markdig's heading ids with GitHub-style slugs.
         /// Markdig drops the leading number from headings like "## 1. Fix the editor"
         /// and collapses runs of separators, so links written against GitHub's scheme
         /// (as generated by GitHub itself and by most Markdown tooling) don't resolve.
         /// </summary>
         private static (string Html, IReadOnlyDictionary<string, string> FolderMappings)
-            ToHtmlWithGitHubAnchors(string markdown, string? filePath)
+            ToHtmlWithGitHubAnchors(string markdown, string? filePath, MarkdownPipeline pipeline)
         {
             // Fully qualified: the Markdown.ColorCode namespace shadows Markdig.Markdown.
-            var document = Markdig.Markdown.Parse(markdown, Pipeline);
+            var document = Markdig.Markdown.Parse(markdown, pipeline);
 
             var used = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var heading in document.Descendants<HeadingBlock>())
@@ -245,7 +298,7 @@ namespace LightMD
 
             using var writer = new StringWriter();
             var renderer = new HtmlRenderer(writer);
-            Pipeline.Setup(renderer);
+            pipeline.Setup(renderer);
             renderer.Render(document);
             writer.Flush();
 
@@ -358,7 +411,7 @@ namespace LightMD
 
             return html;
 
-            static string Rebuild(System.Text.RegularExpressions.Match match, string value) =>
+            static string Rebuild(Match match, string value) =>
                 $"{match.Groups["attr"].Value}{match.Groups["q"].Value}{value}{match.Groups["q"].Value}";
         }
 
@@ -370,20 +423,17 @@ namespace LightMD
         /// Escaped markup inside code blocks can't match: its quotes are
         /// already entities by this point.
         /// </summary>
-        private static readonly System.Text.RegularExpressions.Regex LocalSourceAttribute =
+        private static readonly Regex LocalSourceAttribute =
             new(@"(?<attr>\b(?:src|poster)\s*=\s*)(?<q>[""'])(?<url>[^""']*)\k<q>",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                | System.Text.RegularExpressions.RegexOptions.Compiled);
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-        private static readonly System.Text.RegularExpressions.Regex SrcsetAttribute =
+        private static readonly Regex SrcsetAttribute =
             new(@"(?<attr>\bsrcset\s*=\s*)(?<q>[""'])(?<url>[^""']*)\k<q>",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                | System.Text.RegularExpressions.RegexOptions.Compiled);
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-        private static readonly System.Text.RegularExpressions.Regex LocalHrefAttribute =
+        private static readonly Regex LocalHrefAttribute =
             new(@"(?<attr>\bhref\s*=\s*)(?<q>[""'])(?<url>[^""']*)\k<q>",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                | System.Text.RegularExpressions.RegexOptions.Compiled);
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>
         /// Resolves a Markdown URL to an existing local file, or returns false
@@ -395,7 +445,7 @@ namespace LightMD
 
             if (Uri.TryCreate(url, UriKind.Absolute, out var absolute))
             {
-                // Remote and inline images already work as written.
+                // Remote and inline references already work as written.
                 if (!absolute.IsFile)
                     return false;
 
@@ -403,7 +453,8 @@ namespace LightMD
                 return File.Exists(fullPath);
             }
 
-            // Strip any ?query / #fragment a relative path may carry.
+            // Strip any ?query / #fragment a relative path may carry. A link that
+            // is only a fragment leaves nothing behind and is left alone.
             var path = url.Split('?', '#')[0];
             if (path.Length == 0)
                 return false;

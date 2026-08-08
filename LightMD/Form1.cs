@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
+using Microsoft.Win32;
 
 namespace LightMD
 {
@@ -9,8 +10,12 @@ namespace LightMD
         private readonly string[]? _args;
         private readonly List<string> _mappedHosts = new();
 
+        private ViewerTheme _theme = ViewerTheme.Light;
+
         /// <summary>Heading to jump to once the next document has loaded.</summary>
         private string? _pendingFragment;
+
+        private string? _currentFile;
 
         public Form1(string[]? args = null)
         {
@@ -34,6 +39,9 @@ namespace LightMD
 
             try
             {
+                _theme = DetectSystemTheme();
+                ApplyThemeToChrome();
+
                 // WebView2 defaults its user-data folder to a directory beside
                 // the executable, which is not writable once installed under
                 // Program Files. Keep it in the user's profile instead.
@@ -54,6 +62,8 @@ namespace LightMD
                 webView.CoreWebView2.NavigationStarting += OnNavigationStarting;
                 webView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
 
+                SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+
                 if (_args is { Length: > 0 })
                 {
                     LoadMarkdownFile(_args[0]);
@@ -71,6 +81,72 @@ namespace LightMD
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
             }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            base.OnFormClosed(e);
+        }
+
+        /// <summary>
+        /// Reads the per-user "app" theme Windows exposes for desktop apps.
+        /// Absent or unreadable means light, which is the Windows default.
+        /// </summary>
+        private static ViewerTheme DetectSystemTheme()
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+                return key?.GetValue("AppsUseLightTheme") is int light && light == 0
+                    ? ViewerTheme.Dark
+                    : ViewerTheme.Light;
+            }
+            catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException)
+            {
+                return ViewerTheme.Light;
+            }
+        }
+
+        private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
+        {
+            if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.VisualStyle))
+                return;
+
+            var theme = DetectSystemTheme();
+            if (theme == _theme)
+                return;
+
+            _theme = theme;
+            ApplyThemeToChrome();
+
+            // ColorCode's palette is baked into the HTML as inline styles, so
+            // the document has to be rendered again rather than restyled.
+            Rerender();
+        }
+
+        /// <summary>
+        /// Matches the window and the WebView2 background to the theme so a
+        /// reload doesn't flash white before the document paints.
+        /// </summary>
+        private void ApplyThemeToChrome()
+        {
+            var background = _theme == ViewerTheme.Dark
+                ? Color.FromArgb(0x0D, 0x11, 0x17)
+                : Color.White;
+
+            BackColor = background;
+            webView.DefaultBackgroundColor = background;
+        }
+
+        /// <summary>Re-renders the document already on screen.</summary>
+        private void Rerender()
+        {
+            if (_currentFile is null)
+                ShowWelcomePage();
+            else
+                LoadMarkdownFile(_currentFile);
         }
 
         private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
@@ -217,9 +293,11 @@ namespace LightMD
                 }
 
                 var markdown = File.ReadAllText(filePath);
-                var document = MarkdownRenderer.Render(markdown, filePath);
+                var document = MarkdownRenderer.Render(markdown, filePath, _theme);
                 ApplyFolderMappings(document.FolderMappings);
                 webView.NavigateToString(document.Html);
+
+                _currentFile = filePath;
                 Text = $"{Path.GetFileName(filePath)} - LightMD";
             }
             catch (UnauthorizedAccessException)
@@ -236,9 +314,12 @@ namespace LightMD
         {
             var document = MarkdownRenderer.Render(
                 "# LightMD\n\nDrag and drop a Markdown file here, or open one from the command line.",
-                null);
+                null,
+                _theme);
             ApplyFolderMappings(document.FolderMappings);
             webView.NavigateToString(document.Html);
+
+            _currentFile = null;
             Text = "LightMD";
         }
 
