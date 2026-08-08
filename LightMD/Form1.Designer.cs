@@ -36,6 +36,7 @@
             this.ClientSize = new System.Drawing.Size(1100, 750);
             this.MinimumSize = new System.Drawing.Size(400, 300);
             this.Text = "LightMD";
+            this.Controls.Add(this.webView);
             this.DragEnter += new System.Windows.Forms.DragEventHandler(this.Form1_DragEnter);
             this.DragDrop += new System.Windows.Forms.DragEventHandler(this.Form1_DragDrop);
 
