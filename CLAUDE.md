@@ -22,6 +22,11 @@ See [README.md](README.md) for user-facing docs and build instructions.
 - WiX v5 CLI (`dotnet tool install --global wix --version 5.0.2`) for the MSI. Pin to v5 — v6+ requires accepting the OSMF licence agreement.
 
 ## Non-obvious things worth knowing
+- **`ExecuteScriptAsync` works while `IsScriptEnabled` is `false`.** That setting governs script the *document* carries, not script the host injects — verified empirically. This is what makes the cross-document fragment jump and the scroll-restore-on-reload possible without weakening the sandbox. Don't "fix" the apparent contradiction by enabling scripting.
+- **`NavigationCompleted` also fires for *cancelled* navigations, with `IsSuccess == false`.** Since document links work by cancelling in `NavigationStarting` and loading the target ourselves, that spurious event arrives interleaved with the real one. `OnNavigationCompleted` must return *before* consuming `_pendingFragment`/`_pendingScrollY`, or the pending jump is eaten by the cancellation and the fragment silently does nothing. This exact bug was hit and fixed.
+- **Links go to an unserved host on purpose.** `open.lightmd.local` is never mapped; the absolute path travels in the query string and `Form1` intercepts. Following a link therefore grants no folder read access, unlike images, which need a real mapping.
+- **The file watcher watches the folder, not the file.** Editors that save by replace would break a file handle and silently stop events. Writes are debounced (~250 ms) and reads use `FileShare.ReadWrite | Delete`, because the watcher fires while the writer may still hold the file.
+- **Theme changes re-render rather than restyle**, because ColorCode emits inline colours. The two palettes are CSS variables declared in one place in `MarkdownRenderer.ThemeVariables` — keep their key sets identical.
 - **Local images work via virtual host mappings, not embedding.** `NavigateToString` gives the page a `data:` URI, which has no base path and may not read `file:///`. `MarkdownRenderer.RewriteLocalImages` maps each referenced folder to its own `assetN.lightmd.local` host and rewrites the `src`. `Form1.ApplyFolderMappings` withdraws the previous document's mappings before applying the new ones. The rewrite is a regex over the *rendered HTML* rather than an AST walk, deliberately — raw `<img>` tags in Markdown are common and an AST walk over `LinkInline` misses them.
 - **Syntax highlighting is server-side on purpose.** ColorCode runs in C#, so `IsScriptEnabled` stays `false`. highlight.js/Prism are more popular but run in the page, which would mean enabling JS for arbitrary opened files. ColorCode also defaults to its *dark* palette — `StyleDictionary.DefaultLight` is passed explicitly or code renders pale grey on the light background.
 - **`Markdown.ColorCode` shadows `Markdig.Markdown`.** The namespace collides with the class, so `Markdig.Markdown.Parse` must be fully qualified.
@@ -35,8 +40,7 @@ See [README.md](README.md) for user-facing docs and build instructions.
 
 ## Conventions
 - No tests currently exist.
-- No dark mode / theming yet — single light stylesheet baked into `MarkdownRenderer.RenderHtml`.
 - Keep it minimal — this is intentionally a "light" viewer, avoid scope creep (no editing, no plugins, no settings UI) unless asked.
 
 ## Known limitations (documented in README)
-Relative *links* between documents still don't resolve — only images are rewritten. `srcset` is not rewritten either (only `src` and `poster`).
+No navigation history (following a document link is one-way). Live reload watches only the open file, not images it embeds. No print/export.

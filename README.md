@@ -26,7 +26,7 @@ notes app:
 
 | | |
 |---|---|
-| **What it does** | Renders Markdown — headings, **bold**, *italic*, tables, syntax-highlighted code, blockquotes, lists, images, task lists, footnotes |
+| **What it does** | Renders Markdown — headings, **bold**, *italic*, tables, syntax-highlighted code, blockquotes, lists, images, task lists, footnotes. Follows your light/dark theme, reloads on save, and follows links between documents |
 | **What it doesn't** | Edit, save, export, print, or sync anything |
 | **Reads** | `.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`, `.mdwn`, `.mdtxt`, `.text` |
 | **Needs** | Windows 10/11, and the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0/runtime) |
@@ -74,8 +74,12 @@ There isn't much to learn — it's a reader.
 |---|---|
 | Scroll / arrow keys / Page Up-Down | Move through the document |
 | Click a link to a heading | Jumps to that section |
+| Click a link to another Markdown file | Opens it here, at the right heading if the link names one |
+| Click a link to any other local file | Opens in whichever app owns that file type |
 | Click a web link | Opens in your normal browser, not inside LightMD |
 | Drop a new file on the window | Replaces what's shown |
+| Save the file you're reading | The window updates on its own, keeping your place |
+| Switch Windows between light and dark | LightMD follows immediately |
 
 ## Uninstalling
 
@@ -132,9 +136,47 @@ loads.
 
 The rewrite runs over the **rendered HTML**, not the syntax tree, so raw
 `<img src="...">` tags — common in READMEs for sizing and alignment — are
-handled alongside Markdown `![](...)` syntax. Because files are streamed from
+handled alongside Markdown `![](...)` syntax. `src`, `poster` and `srcset` are
+all rewritten; `srcset` is parsed per candidate so each URL is resolved while
+its width or density descriptor is preserved. Because files are streamed from
 disk rather than embedded in the page, there's no size limit and no format
 list: whatever the browser can decode, LightMD shows.
+
+### Links to other documents
+
+Local `href`s are rewritten to a host that is deliberately *never* served —
+`Form1` cancels the navigation in `NavigationStarting` and handles the target
+itself. Markdown files open in the viewer; anything else goes to whichever app
+owns it. Because the path travels in the URL, following a link needs no folder
+mapping, so it grants no read access to the folder the target lives in.
+
+A fragment survives the trip, so `other.md#usage` opens the document *and*
+lands on the heading.
+
+### Theme
+
+The palette follows the Windows app theme, read from
+`Themes\Personalize\AppsUseLightTheme`, and switches live via
+`SystemEvents.UserPreferenceChanged`. ColorCode bakes its colours in as inline
+styles, so a theme change re-renders the document rather than restyling it —
+which is also why the two palettes are defined as CSS variables in one place,
+so they can't drift apart structurally.
+
+### Live reload
+
+Saving the open file re-renders it. The watcher is on the containing folder,
+not the file handle, because editors that save by replacing the file would
+otherwise break the handle and stop events; writes are debounced so a
+write-truncate-rename burst becomes a single reload, and the file is read with
+sharing open so a still-locked file doesn't throw.
+
+Scroll position is preserved across the reload, so a save doesn't throw you
+back to the top of what you were reading.
+
+> **On `ExecuteScriptAsync` with scripting disabled:** the fragment jump and
+> the scroll restore both run script, yet `IsScriptEnabled` stays `false`.
+> That setting governs script the *document* carries; script the host injects
+> still runs. Opened files gain nothing.
 
 ### Syntax highlighting
 
@@ -298,11 +340,9 @@ LightMD/
 
 ## Known limitations
 
-- **Relative links between files** — `[see](OTHER.md)` won't open another
-  document. Images are resolved (above), but links aren't yet.
-- **`srcset` isn't rewritten** — only `src` and `poster`. Responsive-image
-  markup in a Markdown file falls back to its `src`.
-- **Light theme only** — the stylesheet is a single light theme; it does not
-  follow the Windows dark-mode setting.
-- **No live reload** — editing a file on disk doesn't refresh the window.
-  Drop the file on again.
+- **No navigation history** — following a link between documents replaces the
+  current one, and there's no Back. Use the link the other document points
+  back with, or drop the original file on the window again.
+- **Only the open file is watched** — live reload notices edits to the document
+  on screen, not to an image it embeds. Re-open to pick those up.
+- **No print or export** — this is a viewer.
