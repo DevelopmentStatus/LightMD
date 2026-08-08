@@ -9,6 +9,8 @@
         {
             if (disposing)
             {
+                _watcher?.Dispose();
+                _reloadTimer?.Dispose();
                 webView?.Dispose();
                 components?.Dispose();
             }

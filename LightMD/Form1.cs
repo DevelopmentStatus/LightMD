@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Win32;
@@ -7,15 +8,27 @@ namespace LightMD
 {
     public partial class Form1 : Form
     {
+        /// <summary>
+        /// Editors often save by writing, truncating and renaming in quick
+        /// succession. Waiting out a short quiet period turns that burst into a
+        /// single reload, and gives the writer time to finish.
+        /// </summary>
+        private const int ReloadDebounceMs = 250;
+
         private readonly string[]? _args;
         private readonly List<string> _mappedHosts = new();
 
+        private readonly FileSystemWatcher _watcher = new();
+        private readonly System.Windows.Forms.Timer _reloadTimer = new();
+
+        private string? _currentFile;
         private ViewerTheme _theme = ViewerTheme.Light;
 
         /// <summary>Heading to jump to once the next document has loaded.</summary>
         private string? _pendingFragment;
 
-        private string? _currentFile;
+        /// <summary>Scroll offset to restore once the next document has loaded.</summary>
+        private double? _pendingScrollY;
 
         public Form1(string[]? args = null)
         {
@@ -31,6 +44,14 @@ namespace LightMD
             {
                 Icon = new Icon(iconStream);
             }
+
+            _reloadTimer.Interval = ReloadDebounceMs;
+            _reloadTimer.Tick += OnReloadTimerTick;
+
+            _watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size;
+            _watcher.Changed += OnWatchedFileChanged;
+            _watcher.Created += OnWatchedFileChanged;
+            _watcher.Renamed += OnWatchedFileChanged;
         }
 
         protected override async void OnLoad(EventArgs e)
@@ -89,6 +110,8 @@ namespace LightMD
             base.OnFormClosed(e);
         }
 
+        // --- theme ---------------------------------------------------------
+
         /// <summary>
         /// Reads the per-user "app" theme Windows exposes for desktop apps.
         /// Absent or unreadable means light, which is the Windows default.
@@ -140,14 +163,7 @@ namespace LightMD
             webView.DefaultBackgroundColor = background;
         }
 
-        /// <summary>Re-renders the document already on screen.</summary>
-        private void Rerender()
-        {
-            if (_currentFile is null)
-                ShowWelcomePage();
-            else
-                LoadMarkdownFile(_currentFile);
-        }
+        // --- loading -------------------------------------------------------
 
         private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
         {
@@ -206,6 +222,64 @@ namespace LightMD
             }
         }
 
+        /// <summary>
+        /// Restores the reader's position once a document has painted: the
+        /// heading a link pointed at, or the offset held across a reload.
+        /// <para>
+        /// <c>ExecuteScriptAsync</c> keeps working while
+        /// <c>IsScriptEnabled</c> is false — that setting governs script the
+        /// document itself carries, not script the host injects. So this
+        /// costs nothing in terms of what an opened file is allowed to run.
+        /// </para>
+        /// </summary>
+        private async void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            // Cancelling a navigation also raises this event. Leave the pending
+            // state alone in that case: the document the reader actually asked
+            // for is on its way, and it is the one that should consume it.
+            if (!e.IsSuccess)
+                return;
+
+            var fragment = _pendingFragment;
+            var scrollY = _pendingScrollY;
+            _pendingFragment = null;
+            _pendingScrollY = null;
+
+            try
+            {
+                if (!string.IsNullOrEmpty(fragment))
+                {
+                    var id = JsonSerializer.Serialize(fragment);
+                    await webView.CoreWebView2.ExecuteScriptAsync(
+                        $"document.getElementById({id})?.scrollIntoView()");
+                }
+                else if (scrollY is > 0)
+                {
+                    var y = scrollY.Value.ToString(CultureInfo.InvariantCulture);
+                    await webView.CoreWebView2.ExecuteScriptAsync($"window.scrollTo(0,{y})");
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+            {
+                // The view went away mid-navigation; nothing to restore onto.
+            }
+        }
+
+        private async Task<double?> GetScrollOffsetAsync()
+        {
+            try
+            {
+                var raw = await webView.CoreWebView2.ExecuteScriptAsync("window.scrollY");
+                return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
+                    ? y
+                    : null;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+            {
+                return null;
+            }
+        }
+
         private void OpenExternally(string target)
         {
             try
@@ -223,42 +297,6 @@ namespace LightMD
                     "LightMD",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
-            }
-        }
-
-        /// <summary>
-        /// Restores the reader's position once a document has painted: the
-        /// heading a link pointed at.
-        /// <para>
-        /// <c>ExecuteScriptAsync</c> keeps working while
-        /// <c>IsScriptEnabled</c> is false — that setting governs script the
-        /// document itself carries, not script the host injects. So this
-        /// costs nothing in terms of what an opened file is allowed to run.
-        /// </para>
-        /// </summary>
-        private async void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
-        {
-            // Cancelling a navigation also raises this event. Leave the pending
-            // state alone in that case: the document the reader actually asked
-            // for is on its way, and it is the one that should consume it.
-            if (!e.IsSuccess)
-                return;
-
-            var fragment = _pendingFragment;
-            _pendingFragment = null;
-
-            if (string.IsNullOrEmpty(fragment))
-                return;
-
-            try
-            {
-                var id = JsonSerializer.Serialize(fragment);
-                await webView.CoreWebView2.ExecuteScriptAsync(
-                    $"document.getElementById({id})?.scrollIntoView()");
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
-            {
-                // The view went away mid-navigation; nothing to restore onto.
             }
         }
 
@@ -292,13 +330,14 @@ namespace LightMD
                     return;
                 }
 
-                var markdown = File.ReadAllText(filePath);
+                var markdown = ReadAllTextShared(filePath);
                 var document = MarkdownRenderer.Render(markdown, filePath, _theme);
                 ApplyFolderMappings(document.FolderMappings);
                 webView.NavigateToString(document.Html);
 
                 _currentFile = filePath;
                 Text = $"{Path.GetFileName(filePath)} - LightMD";
+                WatchCurrentFile();
             }
             catch (UnauthorizedAccessException)
             {
@@ -308,6 +347,19 @@ namespace LightMD
             {
                 ShowError($"Could not read file:\n\n{ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Reads with sharing left wide open. A plain File.ReadAllText fails if
+        /// the editor that just saved still holds the file, which is exactly the
+        /// moment the watcher fires.
+        /// </summary>
+        private static string ReadAllTextShared(string filePath)
+        {
+            using var stream = new FileStream(
+                filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
         }
 
         private void ShowWelcomePage()
@@ -320,7 +372,22 @@ namespace LightMD
             webView.NavigateToString(document.Html);
 
             _currentFile = null;
+            _watcher.EnableRaisingEvents = false;
             Text = "LightMD";
+        }
+
+        /// <summary>Re-renders the document already on screen, in place.</summary>
+        private async void Rerender()
+        {
+            if (_currentFile is null)
+            {
+                ShowWelcomePage();
+                return;
+            }
+
+            var scrollY = await GetScrollOffsetAsync();
+            LoadMarkdownFile(_currentFile);
+            _pendingScrollY = scrollY;
         }
 
         /// <summary>
@@ -343,6 +410,56 @@ namespace LightMD
                 _mappedHosts.Add(host);
             }
         }
+
+        // --- live reload ---------------------------------------------------
+
+        /// <summary>
+        /// Watches the folder rather than the file itself: editors that save by
+        /// replacing the file would otherwise break the handle and stop events.
+        /// </summary>
+        private void WatchCurrentFile()
+        {
+            if (_currentFile is null)
+                return;
+
+            var folder = Path.GetDirectoryName(Path.GetFullPath(_currentFile));
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+            {
+                _watcher.EnableRaisingEvents = false;
+                return;
+            }
+
+            _watcher.EnableRaisingEvents = false;
+            _watcher.Path = folder;
+            _watcher.Filter = Path.GetFileName(_currentFile);
+            _watcher.EnableRaisingEvents = true;
+        }
+
+        private void OnWatchedFileChanged(object sender, FileSystemEventArgs e)
+        {
+            // Watcher events arrive on a pool thread.
+            BeginInvoke(() =>
+            {
+                _reloadTimer.Stop();
+                _reloadTimer.Start();
+            });
+        }
+
+        private async void OnReloadTimerTick(object? sender, EventArgs e)
+        {
+            _reloadTimer.Stop();
+
+            if (_currentFile is null || !File.Exists(_currentFile))
+                return;
+
+            // Hold the reader's place: a save shouldn't throw them back to the
+            // top of the document they were part-way through.
+            var scrollY = await GetScrollOffsetAsync();
+            LoadMarkdownFile(_currentFile);
+            _pendingScrollY = scrollY;
+        }
+
+        // --- misc ----------------------------------------------------------
 
         private void ShowError(string message)
         {
