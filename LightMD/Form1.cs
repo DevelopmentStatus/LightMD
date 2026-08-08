@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Web.WebView2.Core;
 
 namespace LightMD
 {
@@ -18,7 +19,15 @@ namespace LightMD
 
             try
             {
-                await webView.EnsureCoreWebView2Async(null);
+                // WebView2 defaults its user-data folder to a directory beside
+                // the executable, which is not writable once installed under
+                // Program Files. Keep it in the user's profile instead.
+                var userDataFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "LightMD",
+                    "WebView2");
+                var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder, null);
+                await webView.EnsureCoreWebView2Async(environment);
 
                 webView.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false;
                 webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
