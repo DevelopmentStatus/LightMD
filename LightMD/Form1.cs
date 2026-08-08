@@ -1,15 +1,27 @@
 using System.Diagnostics;
+using Microsoft.Web.WebView2.Core;
 
 namespace LightMD
 {
     public partial class Form1 : Form
     {
         private readonly string[]? _args;
+        private readonly List<string> _mappedHosts = new();
 
         public Form1(string[]? args = null)
         {
             _args = args;
             InitializeComponent();
+
+            // The embedded .ico carries every size, so the title bar and the
+            // taskbar each pick the resolution they want.
+            using var iconStream = System.Reflection.Assembly
+                .GetExecutingAssembly()
+                .GetManifestResourceStream("LightMD.lightmd.ico");
+            if (iconStream is not null)
+            {
+                Icon = new Icon(iconStream);
+            }
         }
 
         protected override async void OnLoad(EventArgs e)
@@ -18,7 +30,15 @@ namespace LightMD
 
             try
             {
-                await webView.EnsureCoreWebView2Async(null);
+                // WebView2 defaults its user-data folder to a directory beside
+                // the executable, which is not writable once installed under
+                // Program Files. Keep it in the user's profile instead.
+                var userDataFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "LightMD",
+                    "WebView2");
+                var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder, null);
+                await webView.EnsureCoreWebView2Async(environment);
 
                 webView.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false;
                 webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
@@ -100,8 +120,9 @@ namespace LightMD
                 }
 
                 var markdown = File.ReadAllText(filePath);
-                var html = MarkdownRenderer.RenderHtml(markdown, filePath);
-                webView.NavigateToString(html);
+                var document = MarkdownRenderer.Render(markdown, filePath);
+                ApplyFolderMappings(document.FolderMappings);
+                webView.NavigateToString(document.Html);
                 Text = $"{Path.GetFileName(filePath)} - LightMD";
             }
             catch (UnauthorizedAccessException)
@@ -116,9 +137,33 @@ namespace LightMD
 
         private void ShowWelcomePage()
         {
-            var html = MarkdownRenderer.RenderHtml("# LightMD\n\nDrag and drop a Markdown file here, or open one from the command line.", null);
-            webView.NavigateToString(html);
+            var document = MarkdownRenderer.Render(
+                "# LightMD\n\nDrag and drop a Markdown file here, or open one from the command line.",
+                null);
+            ApplyFolderMappings(document.FolderMappings);
+            webView.NavigateToString(document.Html);
             Text = "LightMD";
+        }
+
+        /// <summary>
+        /// Republishes the set of folders WebView2 may serve local images from.
+        /// Mappings are per-document, so the previous document's folders are
+        /// withdrawn first — a file never keeps access after it is closed.
+        /// </summary>
+        private void ApplyFolderMappings(IReadOnlyDictionary<string, string> mappings)
+        {
+            foreach (var host in _mappedHosts)
+            {
+                webView.CoreWebView2.ClearVirtualHostNameToFolderMapping(host);
+            }
+            _mappedHosts.Clear();
+
+            foreach (var (host, folder) in mappings)
+            {
+                webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                    host, folder, CoreWebView2HostResourceAccessKind.Allow);
+                _mappedHosts.Add(host);
+            }
         }
 
         private void ShowError(string message)

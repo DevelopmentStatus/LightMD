@@ -11,5 +11,10 @@ obj/
 .idea/
 .vscode/
 
+## Installer output
+installer/bin/
+installer/obj/
+publish/
+
 ## Logs
 *.log

@@ -1,6 +1,6 @@
 # LightMD Test
 
-This is a test document.
+A sample document that exercises the renderer.
 
 ## Installation
 
@@ -31,9 +31,26 @@ Configuration content.
 `inline code`
 
 ```csharp
-Console.WriteLine("Hello");
+public class Greeter
+{
+    // Syntax highlighting is done in C#, before the HTML reaches the browser.
+    public string Greet(string name) => $"Hello, {name}!";
+    private const int Answer = 42;
+}
+```
+
+```python
+def fibonacci(n: int) -> list[int]:
+    a, b = 0, 1
+    result = []
+    for _ in range(n):
+        result.append(a)
+        a, b = b, a + b
+    return result
 ```
 
 | Name | Value |
 |------|-------|
 | Test | 123 |
+
+![The LightMD icon, loaded from a relative path](docs/icon.png)
