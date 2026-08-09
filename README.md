@@ -74,9 +74,9 @@ There isn't much to learn — it's a reader.
 |---|---|
 | Scroll / arrow keys / Page Up-Down | Move through the document |
 | Click a link to a heading | Jumps to that section |
-| Click a link to another Markdown file | Opens it here, at the right heading if the link names one |
-| Click a link to any other local file | Opens in whichever app owns that file type |
-| Click a web link | Opens in your normal browser, not inside LightMD |
+| Click a link to another Markdown file | Asks first, then opens it here, at the right heading if the link names one |
+| Click a link to any other local file | Asks first, then opens in whichever app owns that file type |
+| Click a web link | Asks first, then opens in your normal browser, not inside LightMD |
 | Drop a new file on the window | Replaces what's shown |
 | Save the file you're reading | The window updates on its own, keeping your place |
 | Switch Windows between light and dark | LightMD follows immediately |
@@ -152,6 +152,10 @@ mapping, so it grants no read access to the folder the target lives in.
 
 A fragment survives the trip, so `other.md#usage` opens the document *and*
 lands on the heading.
+
+Nothing is followed silently: a Yes/No prompt shows the target first, defaulting
+to No, so a mistyped click or an unexpected destination costs nothing. In-page
+heading links are untouched — the WebView handles those itself.
 
 ### Theme
 

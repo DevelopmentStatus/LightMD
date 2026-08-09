@@ -176,7 +176,10 @@ namespace LightMD
             if (e.Uri.StartsWith($"https://{MarkdownRenderer.DocumentLinkHost}/", StringComparison.OrdinalIgnoreCase))
             {
                 e.Cancel = true;
-                OpenLinkedFile(e.Uri);
+                // BeginInvoke: the confirmation is modal, and blocking inside a
+                // NavigationStarting handler stalls the WebView. Let it unwind.
+                var uri = e.Uri;
+                BeginInvoke(() => OpenLinkedFile(uri));
                 return;
             }
 
@@ -184,8 +187,28 @@ namespace LightMD
                 e.Uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 e.Cancel = true;
-                OpenExternally(e.Uri);
+                var uri = e.Uri;
+                BeginInvoke(() =>
+                {
+                    if (ConfirmFollow(uri))
+                        OpenExternally(uri);
+                });
             }
+        }
+
+        /// <summary>
+        /// Asks the reader whether to follow a link. Nothing is opened until
+        /// they say yes.
+        /// </summary>
+        private bool ConfirmFollow(string target)
+        {
+            return MessageBox.Show(
+                this,
+                $"Open this link?\n\n{target}",
+                "LightMD",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2) == DialogResult.Yes;
         }
 
         /// <summary>
@@ -210,11 +233,12 @@ namespace LightMD
             if (path.Length == 0)
                 return;
 
+            if (!ConfirmFollow(path))
+                return;
+
             if (IsMarkdownFile(path))
             {
-                // BeginInvoke: navigating from inside a NavigationStarting
-                // handler is not allowed, so let this one unwind first.
-                BeginInvoke(() => LoadMarkdownFile(path, fragment));
+                LoadMarkdownFile(path, fragment);
             }
             else
             {
