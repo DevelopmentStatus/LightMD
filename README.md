@@ -3,7 +3,7 @@
 # LightMD
 
 **A lightweight Markdown viewer for Windows.**
-Double-click a `.md` file, read it properly formatted, close it. That's the whole idea.
+Double-click a `.md` file, it opens instantly in preview mode, no editor.
 
 <br clear="left">
 
