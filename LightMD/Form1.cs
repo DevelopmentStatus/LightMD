@@ -176,8 +176,8 @@ namespace LightMD
             if (e.Uri.StartsWith($"https://{MarkdownRenderer.DocumentLinkHost}/", StringComparison.OrdinalIgnoreCase))
             {
                 e.Cancel = true;
-                // BeginInvoke: the confirmation is modal, and blocking inside a
-                // NavigationStarting handler stalls the WebView. Let it unwind.
+                // BeginInvoke: navigating from inside a NavigationStarting
+                // handler is not allowed, so let this one unwind first.
                 var uri = e.Uri;
                 BeginInvoke(() => OpenLinkedFile(uri));
                 return;
@@ -231,9 +231,6 @@ namespace LightMD
             }
 
             if (path.Length == 0)
-                return;
-
-            if (!ConfirmFollow(path))
                 return;
 
             if (IsMarkdownFile(path))
